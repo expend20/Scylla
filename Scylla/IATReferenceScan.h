@@ -73,6 +73,7 @@ public:
 	void printDirectImportLog();
 	void changeIatBaseOfDirectImports( DWORD newIatBaseAddressRVA );
 	DWORD addAdditionalApisToList();
+	bool isInIATCached(DWORD_PTR ptr);
 private:
 	DWORD_PTR NewIatAddressRVA;
 
@@ -88,6 +89,7 @@ private:
 	std::vector<IATReference> iatDirectImportList;
 
 	void scanMemoryPage( PVOID BaseAddress, SIZE_T RegionSize );
+	void scanMemoryPageNoDisasm(PVOID BaseAddress, SIZE_T RegionSize);
 	void analyzeInstruction( _DInst * instruction );
 	void findNormalIatReference( _DInst * instruction );
 	void getIatEntryAddress( IATReference* ref );

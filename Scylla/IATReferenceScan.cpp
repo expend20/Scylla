@@ -86,6 +86,7 @@ void IATReferenceScan::startScan(DWORD_PTR imageBase, DWORD imageSize, DWORD_PTR
 			{
 				//do read and scan
 				scanMemoryPage(memBasic.BaseAddress, memBasic.RegionSize);
+				scanMemoryPageNoDisasm(memBasic.BaseAddress, memBasic.RegionSize);
 			}
 		}
 
@@ -125,6 +126,102 @@ void IATReferenceScan::patchDirectImportsMemory( bool junkByteAfterInstruction )
 	}
 }
 
+bool IATReferenceScan::isInIATCached(DWORD_PTR ptr)
+{
+	static std::vector<DWORD_PTR> cache;
+	bool isFound = false;
+
+	if (!cache.size()) {
+
+		for (std::vector<IATReference>::iterator iter = iatDirectImportList.begin(); iter != iatDirectImportList.end(); iter++)
+		{
+			IATReference * ref = &(*iter);
+
+			cache.push_back(ref->addressVA);
+		}
+	}
+
+	std::vector<DWORD_PTR>::iterator it = std::find(cache.begin(), cache.end(), ptr);
+
+	return it == cache.end() ? false : true;
+}
+
+void IATReferenceScan::scanMemoryPageNoDisasm( PVOID BaseAddress, SIZE_T RegionSize )
+{
+	BYTE * dataBuffer = (BYTE *)calloc(RegionSize, 1);
+	BYTE * currentPos = dataBuffer;
+	int currentSize = (int)RegionSize;
+	DWORD_PTR currentOffset = (DWORD_PTR)BaseAddress;
+	_DecodeResult res;
+	unsigned int instructionsCount = 0, next = 0;
+	
+	if (!dataBuffer)
+		return;
+
+	DWORD_PTR ptr;
+	DWORD_PTR ptr2;
+	DWORD_PTR offset = 0;
+	DWORD_PTR nextOffset = (DWORD_PTR)BaseAddress + sizeof(DWORD_PTR);
+
+	if (ProcessAccessHelp::readMemoryFromProcess((DWORD_PTR)BaseAddress, RegionSize, (LPVOID)dataBuffer))
+	{   // TODO: ready pointers
+
+        // e8/e9 - relative call/jmp
+
+		while (1) {
+			ptr = *(DWORD_PTR*)((DWORD_PTR)dataBuffer + offset);
+						
+			if ((BYTE)ptr == 0xe8 || (BYTE)ptr == 0xe9) { // relative call
+
+				ZeroMemory(&ProcessAccessHelp::decomposerCi, sizeof(_CodeInfo));
+				ProcessAccessHelp::decomposerCi.code = dataBuffer + offset;
+				ProcessAccessHelp::decomposerCi.codeLen = 0x10;// currentSize;
+				ProcessAccessHelp::decomposerCi.dt = ProcessAccessHelp::dt;
+				ProcessAccessHelp::decomposerCi.codeOffset = (DWORD_PTR)BaseAddress + offset;
+
+				instructionsCount = 0;
+
+				offset++;
+				nextOffset++;
+
+				if (offset >= (RegionSize - sizeof(DWORD_PTR))) {
+					break;
+				}
+
+				ptr = *(DWORD_PTR*)((DWORD_PTR)dataBuffer + offset);
+				ptr2 = nextOffset + ptr;
+
+				bool isSuspect = false;
+				if (apiReader->getApiByVirtualAddress(ptr2, &isSuspect) != 0)
+				{
+					if (!isInIATCached(ProcessAccessHelp::decomposerCi.codeOffset))
+					{
+						res = distorm_decompose(&ProcessAccessHelp::decomposerCi, ProcessAccessHelp::decomposerResult, 1, &instructionsCount);
+
+						if (res == DECRES_INPUTERR)
+						{
+							break;
+						}
+
+						if (ProcessAccessHelp::decomposerResult[0].flags != FLAG_NOT_DECODABLE)
+						{
+							analyzeInstruction(&ProcessAccessHelp::decomposerResult[0]);
+						}
+					}
+				}
+			}
+			offset++;
+			nextOffset++;
+
+			if (offset >= (RegionSize - sizeof(DWORD_PTR))) {
+				break;
+			}
+		}
+	}
+
+	free(dataBuffer);
+}
+
 void IATReferenceScan::scanMemoryPage( PVOID BaseAddress, SIZE_T RegionSize )
 {
 	BYTE * dataBuffer = (BYTE *)calloc(RegionSize, 1);
@@ -138,7 +235,7 @@ void IATReferenceScan::scanMemoryPage( PVOID BaseAddress, SIZE_T RegionSize )
 		return;
 
 	if (ProcessAccessHelp::readMemoryFromProcess((DWORD_PTR)BaseAddress, RegionSize, (LPVOID)dataBuffer))
-	{
+	{  
 		while (1)
 		{
 			ZeroMemory(&ProcessAccessHelp::decomposerCi, sizeof(_CodeInfo));
